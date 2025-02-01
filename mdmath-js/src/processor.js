@@ -10,6 +10,8 @@ import { onExit } from './onexit.js';
 // To prevent conflicts with other instances
 const DIRECTORY_SUFFIX = randomBytes(3).toString('hex');
 
+const PREAMBLE_PATH = '/home/fireond/Documents/Obsidian-Vault/preamble.tex'; // 修改为实际路径
+
 // TODO: Portable directory instead of Unix-specific
 const IMG_DIR = `/tmp/nvim-mdmath-${DIRECTORY_SUFFIX}`;
 
@@ -42,6 +44,40 @@ function mkdirSync(path) {
         if (err.code !== 'EEXIST')
             throw err;
     }
+}
+
+
+/**
+ * 从 LaTeX 文件中解析 \newcommand, \DeclareMathOperator 等命令
+ * @param {string} content
+ * @returns {Record<string, string|string[]>}
+ */
+function parseLatexCommands(content) {
+    const macros = {};
+
+    // 解析 \newcommand 和 \renewcommand
+    const newCommandRegex = /\\(?:re)?newcommand{\\([^}]+)}(?:\[(\d+)])?{([^}]+)}/g;
+    let match;
+    while ((match = newCommandRegex.exec(content)) !== null) {
+        const name = match[1];
+        const numArgs = match[2] ? parseInt(match[2]) : 0;
+        const replacement = match[3].trim();
+        macros[name] = numArgs > 0 ? [replacement, numArgs] : replacement;
+    }
+
+    // 解析 \DeclareMathOperator 和 \DeclareMathOperator*
+    const declareMathOpRegex = /\\DeclareMathOperator(\*?){\\([^}]+)}{([^}]+)}/g;
+    while ((match = declareMathOpRegex.exec(content)) !== null) {
+        const star = match[1]; // 捕获是否有星号（*）
+        const name = match[2];
+        const operator = match[3];
+        // 生成 MathJax 兼容的运算符定义
+        macros[name] = star
+            ? `\\mathop{\\operatorname*{${operator}}}`  // 带星号版本（上下标在顶部）
+            : `\\mathop{\\mathrm{${operator}}}`;        // 无星号版本（默认样式）
+    }
+
+    return macros;
 }
 
 /**
@@ -173,6 +209,17 @@ function processAll(request) {
 function main() {
     mkdirSync(IMG_DIR);
 
+     // 读取并解析 preamble.tex
+    let preambleContent;
+    try {
+        preambleContent = fs.readFileSync(PREAMBLE_PATH, 'utf-8');
+    } catch (err) {
+        console.error(`无法加载 preamble.tex: ${err.message}`);
+        process.exit(1);
+    }
+
+    const customMacros = parseLatexCommands(preambleContent);
+
     onExit(() => {
         equations.forEach(({filename}) => {
             try {
@@ -190,7 +237,8 @@ function main() {
         tex: {
             formatError: (_, err) => {
                 throw new MathError(err.message);
-            }
+            },
+            macros: customMacros // 注入解析后的宏
         }
     }).then((MathJax_) => {
         MathJax = MathJax_;
